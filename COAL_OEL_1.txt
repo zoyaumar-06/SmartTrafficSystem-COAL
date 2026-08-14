@@ -1,0 +1,724 @@
+INCLUDE Irvine32.inc
+
+MAX = 10
+LOG_MAX = 5
+
+.data
+
+menu BYTE 13,10,
+    "===== SMART TRAFFIC SYSTEM =====",13,10,
+    "1. Add Junction",13,10,
+    "2. Display Junctions (Sorted)",13,10,
+    "3. Search Junction",13,10,
+    "4. Update Congestion",13,10,
+    "5. Emergency Priority Check",13,10,
+    "6. Average Congestion",13,10,
+    "7. Show Last 5 Events",13,10,
+    "8. Categorize Congestion",13,10,
+    "9. Exit",13,10,
+    "Choice: ",0
+
+msgID        BYTE "Enter Junction ID: ",0
+msgVehicle   BYTE "Enter Vehicle Count: ",0
+msgCong      BYTE "Enter Congestion (1=Low 2=Medium 3=High): ",0
+msgEmergency BYTE "Emergency Vehicle? (0/1): ",0
+msgWait      BYTE "Enter Waiting Time: ",0
+
+msgNotFound  BYTE "Junction Not Found!",13,10,0
+msgFound     BYTE "Junction Found!",13,10,0
+msgFull      BYTE "Memory Full!",13,10,0
+msgEmpty     BYTE "No Records Available!",13,10,0
+msgDuplicate BYTE "Duplicate Junction ID!",13,10,0
+msgInvalid   BYTE "Invalid Input!",13,10,0
+msgAdded     BYTE "Junction Added!",13,10,0
+msgUpdated   BYTE "Congestion Updated!",13,10,0
+
+avgMsg     BYTE "Average Congestion = ",0
+emgMsg     BYTE ">>> PRIORITY GREEN SIGNAL <<<",13,10,0
+emgCount   BYTE "Total Emergency Alerts: ",0
+headerLine BYTE "-------------------------------------------",13,10,0
+tableHdr   BYTE " ID   Vehicles  Congestion  Emergency  Wait",13,10,0
+logMsg     BYTE "--- LAST 5 EVENTS ---",13,10,0
+logEntry   BYTE " Event: Junction ID = ",0
+sortMsg    BYTE "Sorted by Congestion:",13,10,0
+nestMsg    BYTE " [Nested Stack Call Active]",13,10,0
+lowMsg     BYTE "--- LOW (1) ---",13,10,0
+medMsg     BYTE "--- MEDIUM (2) ---",13,10,0
+highMsg    BYTE "--- HIGH (3) ---",13,10,0
+noneMsg    BYTE " None",13,10,0
+lblID      BYTE " Junction ID   : ",0
+lblVeh     BYTE " Vehicle Count : ",0
+lblCong    BYTE " Congestion    : ",0
+lblEmg     BYTE " Emergency     : ",0
+lblWait    BYTE " Waiting Time  : ",0
+
+count          DWORD 0
+emergencyTotal DWORD 0
+
+junctionID    DWORD MAX DUP(0)
+vehicleCount  DWORD MAX DUP(0)
+congestion    DWORD MAX DUP(0)
+emergencyFlag DWORD MAX DUP(0)
+waitingTime   DWORD MAX DUP(0)
+
+eventLog  DWORD LOG_MAX DUP(0)
+eventHead DWORD 0
+
+.code
+
+LogEvent PROC
+    push ebx
+    mov ebx, eventHead
+    mov eventLog[ebx*4], eax
+    inc ebx
+    cmp ebx, LOG_MAX
+    jl @F
+    mov ebx, 0
+@@: mov eventHead, ebx
+    pop ebx
+    ret
+LogEvent ENDP
+
+StackDemoInner PROC
+    push eax
+    push ebx
+    mov edx, OFFSET nestMsg
+    call WriteString
+    pop ebx
+    pop eax
+    ret
+StackDemoInner ENDP
+
+StackDemoOuter PROC
+    push eax
+    call StackDemoInner
+    pop eax
+    ret
+StackDemoOuter ENDP
+
+SortByCongest PROC
+    push eax
+    push ebx
+    push ecx
+    push esi
+
+    mov ecx, count
+    cmp ecx, 1
+    jle SortDone
+    dec ecx
+    mov [esp], ecx      ; update saved ecx
+
+SortOuter:
+    push ecx
+    mov ecx, count
+    dec ecx
+    mov esi, 0
+
+SortInner:
+    mov eax, congestion[esi*4]
+    mov ebx, congestion[esi*4+4]
+    cmp eax, ebx
+    jle SortNoSwap
+
+    mov congestion[esi*4], ebx
+    mov congestion[esi*4+4], eax
+
+    mov eax, junctionID[esi*4]
+    mov ebx, junctionID[esi*4+4]
+    mov junctionID[esi*4], ebx
+    mov junctionID[esi*4+4], eax
+
+    mov eax, vehicleCount[esi*4]
+    mov ebx, vehicleCount[esi*4+4]
+    mov vehicleCount[esi*4], ebx
+    mov vehicleCount[esi*4+4], eax
+
+    mov eax, emergencyFlag[esi*4]
+    mov ebx, emergencyFlag[esi*4+4]
+    mov emergencyFlag[esi*4], ebx
+    mov emergencyFlag[esi*4+4], eax
+
+    mov eax, waitingTime[esi*4]
+    mov ebx, waitingTime[esi*4+4]
+    mov waitingTime[esi*4], ebx
+    mov waitingTime[esi*4+4], eax
+
+SortNoSwap:
+    inc esi
+    dec ecx
+    jnz SortInner
+
+    pop ecx
+    dec ecx
+    jnz SortOuter
+
+SortDone:
+    pop esi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+SortByCongest ENDP
+
+main PROC
+
+MenuLoop:
+    mov edx, OFFSET menu
+    call WriteString
+    call ReadInt
+
+    cmp eax, 1
+    jne M2
+    call AddRecord
+    jmp MenuLoop
+M2: cmp eax, 2
+    jne M3
+    call DisplayRecords
+    jmp MenuLoop
+M3: cmp eax, 3
+    jne M4
+    call SearchRecord
+    jmp MenuLoop
+M4: cmp eax, 4
+    jne M5
+    call UpdateCongestion
+    jmp MenuLoop
+M5: cmp eax, 5
+    jne M6
+    call EmergencyCheck
+    jmp MenuLoop
+M6: cmp eax, 6
+    jne M7
+    call AverageCongestion
+    jmp MenuLoop
+M7: cmp eax, 7
+    jne M8
+    call ShowEventLog
+    jmp MenuLoop
+M8: cmp eax, 8
+    jne M9
+    call CategorizeCongestion
+    jmp MenuLoop
+M9: cmp eax, 9
+    je ExitProgram
+    mov edx, OFFSET msgInvalid
+    call WriteString
+    jmp MenuLoop
+
+ExitProgram:
+    exit
+
+main ENDP
+
+AddRecord PROC
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+
+    mov eax, count
+    cmp eax, MAX
+    jl AR_AskID
+    mov edx, OFFSET msgFull
+    call WriteString
+    jmp AR_Done
+
+AR_AskID:
+    mov edx, OFFSET msgID
+    call WriteString
+    call ReadInt
+    mov ebx, eax
+
+    mov ecx, count
+    cmp ecx, 0
+    je AR_NoDup
+    mov esi, 0
+AR_DupLoop:
+    mov eax, junctionID[esi*4]
+    cmp eax, ebx
+    je AR_IsDup
+    inc esi
+    dec ecx
+    jnz AR_DupLoop
+    jmp AR_NoDup
+
+AR_IsDup:
+    mov edx, OFFSET msgDuplicate
+    call WriteString
+    jmp AR_Done
+
+AR_NoDup:
+    mov esi, count
+    mov junctionID[esi*4], ebx
+
+    mov edx, OFFSET msgVehicle
+    call WriteString
+    call ReadInt
+    mov vehicleCount[esi*4], eax
+
+AR_GetCong:
+    mov edx, OFFSET msgCong
+    call WriteString
+    call ReadInt
+    cmp eax, 1
+    jl AR_BadCong
+    cmp eax, 3
+    jg AR_BadCong
+    mov congestion[esi*4], eax
+    jmp AR_CongOK
+AR_BadCong:
+    mov edx, OFFSET msgInvalid
+    call WriteString
+    jmp AR_GetCong
+AR_CongOK:
+
+AR_GetEmg:
+    mov edx, OFFSET msgEmergency
+    call WriteString
+    call ReadInt
+    cmp eax, 0
+    je AR_EmgOK
+    cmp eax, 1
+    je AR_EmgOK
+    mov edx, OFFSET msgInvalid
+    call WriteString
+    jmp AR_GetEmg
+AR_EmgOK:
+    mov emergencyFlag[esi*4], eax
+    cmp eax, 1
+    jne AR_SkipEmg
+    inc emergencyTotal
+AR_SkipEmg:
+
+    mov edx, OFFSET msgWait
+    call WriteString
+    call ReadInt
+    mov waitingTime[esi*4], eax
+
+    inc count
+
+    mov eax, junctionID[esi*4]
+    call LogEvent
+    call StackDemoOuter
+
+    mov edx, OFFSET msgAdded
+    call WriteString
+
+AR_Done:
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+AddRecord ENDP
+
+DisplayRecords PROC
+    push eax
+    push ecx
+    push esi
+
+    cmp count, 0
+    jne DR_Sort
+    mov edx, OFFSET msgEmpty
+    call WriteString
+    jmp DR_Done
+
+DR_Sort:
+    call SortByCongest
+    mov edx, OFFSET sortMsg
+    call WriteString
+    mov edx, OFFSET headerLine
+    call WriteString
+    mov edx, OFFSET tableHdr
+    call WriteString
+    mov edx, OFFSET headerLine
+    call WriteString
+
+    mov ecx, count
+    mov esi, 0
+
+DR_Loop:
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblVeh
+    call WriteString
+    mov eax, vehicleCount[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblCong
+    call WriteString
+    mov eax, congestion[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblEmg
+    call WriteString
+    mov eax, emergencyFlag[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblWait
+    call WriteString
+    mov eax, waitingTime[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET headerLine
+    call WriteString
+
+    inc esi
+    dec ecx
+    jnz DR_Loop
+
+DR_Done:
+    pop esi
+    pop ecx
+    pop eax
+    ret
+DisplayRecords ENDP
+
+SearchRecord PROC
+    push eax
+    push ebx
+    push ecx
+    push esi
+
+    mov edx, OFFSET msgID
+    call WriteString
+    call ReadInt
+    mov ebx, eax
+
+    mov ecx, count
+    cmp ecx, 0
+    je SR_NotFound
+    mov esi, 0
+
+SR_Loop:
+    mov eax, junctionID[esi*4]
+    cmp eax, ebx
+    je SR_Found
+    inc esi
+    dec ecx
+    jnz SR_Loop
+
+SR_NotFound:
+    mov edx, OFFSET msgNotFound
+    call WriteString
+    jmp SR_Done
+
+SR_Found:
+    mov edx, OFFSET msgFound
+    call WriteString
+
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblVeh
+    call WriteString
+    mov eax, vehicleCount[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblCong
+    call WriteString
+    mov eax, congestion[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblEmg
+    call WriteString
+    mov eax, emergencyFlag[esi*4]
+    call WriteInt
+    call Crlf
+
+    mov edx, OFFSET lblWait
+    call WriteString
+    mov eax, waitingTime[esi*4]
+    call WriteInt
+    call Crlf
+
+SR_Done:
+    pop esi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+SearchRecord ENDP
+
+UpdateCongestion PROC
+    push eax
+    push ebx
+    push ecx
+    push esi
+
+    mov edx, OFFSET msgID
+    call WriteString
+    call ReadInt
+    mov ebx, eax
+
+    mov ecx, count
+    cmp ecx, 0
+    je UC_NotFound
+    mov esi, 0
+
+UC_Find:
+    mov eax, junctionID[esi*4]
+    cmp eax, ebx
+    je UC_Now
+    inc esi
+    dec ecx
+    jnz UC_Find
+    jmp UC_NotFound
+
+UC_Now:
+UC_GetCong:
+    mov edx, OFFSET msgCong
+    call WriteString
+    call ReadInt
+    cmp eax, 1
+    jl UC_Bad
+    cmp eax, 3
+    jg UC_Bad
+    mov congestion[esi*4], eax
+    mov eax, junctionID[esi*4]
+    call LogEvent
+    mov edx, OFFSET msgUpdated
+    call WriteString
+    jmp UC_Done
+UC_Bad:
+    mov edx, OFFSET msgInvalid
+    call WriteString
+    jmp UC_GetCong
+
+UC_NotFound:
+    mov edx, OFFSET msgNotFound
+    call WriteString
+
+UC_Done:
+    pop esi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+UpdateCongestion ENDP
+
+EmergencyCheck PROC
+    push eax
+    push ecx
+    push esi
+
+    mov ecx, count
+    cmp ecx, 0
+    je EC_Empty
+
+    mov esi, 0
+EC_Loop:
+    mov eax, emergencyFlag[esi*4]
+    cmp eax, 1
+    jne EC_Next
+    mov edx, OFFSET emgMsg
+    call WriteString
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+EC_Next:
+    inc esi
+    dec ecx
+    jnz EC_Loop
+
+    mov edx, OFFSET emgCount
+    call WriteString
+    mov eax, emergencyTotal
+    call WriteInt
+    call Crlf
+    jmp EC_Done
+
+EC_Empty:
+    mov edx, OFFSET msgEmpty
+    call WriteString
+
+EC_Done:
+    pop esi
+    pop ecx
+    pop eax
+    ret
+EmergencyCheck ENDP
+
+AverageCongestion PROC
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+
+    mov ecx, count
+    cmp ecx, 0
+    je AC_NoData
+
+    mov esi, 0
+    mov eax, 0
+AC_Sum:
+    add eax, congestion[esi*4]
+    inc esi
+    dec ecx
+    jnz AC_Sum
+
+    mov ebx, count
+    cdq
+    div ebx
+    mov edx, OFFSET avgMsg
+    call WriteString
+    call WriteInt
+    call Crlf
+    jmp AC_Done
+
+AC_NoData:
+    mov edx, OFFSET msgEmpty
+    call WriteString
+
+AC_Done:
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+AverageCongestion ENDP
+
+ShowEventLog PROC
+    push eax
+    push ecx
+    push esi
+
+    mov edx, OFFSET logMsg
+    call WriteString
+    mov ecx, LOG_MAX
+    mov esi, 0
+
+EL_Loop:
+    mov eax, eventLog[esi*4]
+    cmp eax, 0
+    je EL_Skip
+    mov edx, OFFSET logEntry
+    call WriteString
+    call WriteInt
+    call Crlf
+EL_Skip:
+    inc esi
+    dec ecx
+    jnz EL_Loop
+
+    pop esi
+    pop ecx
+    pop eax
+    ret
+ShowEventLog ENDP
+
+CategorizeCongestion PROC
+    push eax
+    push ebx
+    push ecx
+    push esi
+
+    cmp count, 0
+    jne CC_Go
+    mov edx, OFFSET msgEmpty
+    call WriteString
+    jmp CC_Done
+
+CC_Go:
+    mov edx, OFFSET lowMsg
+    call WriteString
+    mov ecx, count
+    mov esi, 0
+    mov ebx, 0
+CC_Low:
+    mov eax, congestion[esi*4]
+    cmp eax, 1
+    jne CC_LowNext
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+    inc ebx
+CC_LowNext:
+    inc esi
+    dec ecx
+    jnz CC_Low
+    cmp ebx, 0
+    jne CC_Med
+    mov edx, OFFSET noneMsg
+    call WriteString
+
+CC_Med:
+    mov edx, OFFSET medMsg
+    call WriteString
+    mov ecx, count
+    mov esi, 0
+    mov ebx, 0
+CC_MedLoop:
+    mov eax, congestion[esi*4]
+    cmp eax, 2
+    jne CC_MedNext
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+    inc ebx
+CC_MedNext:
+    inc esi
+    dec ecx
+    jnz CC_MedLoop
+    cmp ebx, 0
+    jne CC_High
+    mov edx, OFFSET noneMsg
+    call WriteString
+
+CC_High:
+    mov edx, OFFSET highMsg
+    call WriteString
+    mov ecx, count
+    mov esi, 0
+    mov ebx, 0
+CC_HighLoop:
+    mov eax, congestion[esi*4]
+    cmp eax, 3
+    jne CC_HighNext
+    mov edx, OFFSET lblID
+    call WriteString
+    mov eax, junctionID[esi*4]
+    call WriteInt
+    call Crlf
+    inc ebx
+CC_HighNext:
+    inc esi
+    dec ecx
+    jnz CC_HighLoop
+    cmp ebx, 0
+    jne CC_Done
+    mov edx, OFFSET noneMsg
+    call WriteString
+
+CC_Done:
+    pop esi
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+CategorizeCongestion ENDP
+
+END main
